@@ -164,14 +164,14 @@ bool Util::IsExecutable(const void* data, size_t size) {
 
 // static
 void Util::WaitForDebugger() {
-#if PLATFORM_LINUX
+  // #if PLATFORM_LINUX
   static int s = 0;
   while (s == 0) {
     Sleep(1);
   }
-#elif PLATFORM_WINDOWS
-  __debugbreak();
-#endif
+  // #elif PLATFORM_WINDOWS
+  //   __debugbreak();
+  // #endif
 }
 
 // static
