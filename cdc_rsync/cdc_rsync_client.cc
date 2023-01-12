@@ -109,8 +109,8 @@ CdcRsyncClient::CdcRsyncClient(const Options& options,
   if (!options_.ssh_command.empty()) {
     remote_util_.SetSshCommand(options_.ssh_command);
   }
-  if (!options_.scp_command.empty()) {
-    remote_util_.SetScpCommand(options_.scp_command);
+  if (!options_.sftp_command.empty()) {
+    remote_util_.SetSftpCommand(options_.sftp_command);
   }
 }
 
@@ -415,32 +415,10 @@ absl::Status CdcRsyncClient::DeployServer() {
   }
   printer_.Print(deploy_msg, true, Util::GetConsoleWidth());
 
-  // scp cdc_rsync_server to a temp location on the gamelet.
-  std::string remoteServerTmpPath =
-      absl::StrFormat("%s%s.%s", kRemoteToolsBinDir, kCdcServerFilename,
-                      Util::GenerateUniqueId());
-  std::string localServerPath = path::Join(exe_dir, kCdcServerFilename);
-  status = remote_util_.Scp({localServerPath}, remoteServerTmpPath,
-                            /*compress=*/true);
-  if (!status.ok()) {
-    return WrapStatus(status, "Failed to copy cdc_rsync_server to instance");
-  }
-
-  // Do 3 things in one SSH command, to save time:
-  // - Make the old cdc_rsync_server writable (if it exists).
-  // - Make the new cdc_rsync_server executable.
-  // - Replace the old cdc_rsync_server by the new one.
-  std::string old_path = RemoteUtil::QuoteForWindows(
-      std::string(kRemoteToolsBinDir) + kCdcServerFilename);
-  std::string new_path = RemoteUtil::QuoteForWindows(remoteServerTmpPath);
-  std::string replace_cmd = absl::StrFormat(
-      " ([ ! -f %s ] || chmod u+w %s) && chmod a+x %s && mv %s %s", old_path,
-      old_path, new_path, new_path, old_path);
-  status = remote_util_.Run(replace_cmd, "chmod && chmod && mv");
-  if (!status.ok()) {
-    return WrapStatus(status,
-                      "Failed to replace old cdc_rsync_server by new one");
-  }
+  // sftp cdc_rsync_server to the target.
+  std::string commands = arch.GetDeploySftpCommands();
+  RETURN_IF_ERROR(remote_util_.Sftp(commands, exe_dir, /*compress=*/false),
+                  "Failed to deploy cdc_rsync_server");
 
   return absl::OkStatus();
 }
