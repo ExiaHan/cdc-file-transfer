@@ -22,50 +22,143 @@
 #include "common/path.h"
 #include "common/platform.h"
 #include "common/remote_util.h"
+#include "common/status_macros.h"
 #include "common/util.h"
 
 namespace cdc_ft {
+namespace {
 
 constexpr char kErrorFailedToGetKnownFolderPath[] =
     "error_failed_to_get_known_folder_path";
 constexpr char kErrorArchTypeUnhandled[] = "arch_type_unhandled";
+constexpr char kUnsupportedArchErrorFmt[] =
+    "Unsupported remote device architecture '%s'. If you think this is a "
+    "bug, or if this combination should be supported, please file a bug at "
+    "https://github.com/google/cdc-file-transfer.";
 
-// static
-ServerArch::Type ServerArch::Detect(const std::string& destination) {
-  // Path starting with ~ or / -> Linux.
-  if (absl::StartsWith(destination, "~") ||
-      absl::StartsWith(destination, "/")) {
-    return Type::kLinux;
-  }
-
-  // Path starting with C: etc. -> Windows.
-  if (!path::GetDrivePrefix(destination).empty()) {
-    return Type::kWindows;
-  }
-
-  // Path with only / -> Linux.
-  if (absl::StrContains(destination, "/") &&
-      !absl::StrContains(destination, "\\")) {
-    return Type::kLinux;
-  }
-
-  // Path with only \\ -> Windows.
-  if (absl::StrContains(destination, "\\") &&
-      !absl::StrContains(destination, "/")) {
-    return Type::kWindows;
-  }
-
-  // Default to Linux.
-  return Type::kLinux;
-}
-
-// static
-ServerArch::Type ServerArch::LocalType() {
+// Returns the server arch type of the current process.
+ServerArch::Type LocalType() {
 #if PLATFORM_WINDOWS
   return ServerArch::Type::kWindows;
 #elif PLATFORM_LINUX
   return ServerArch::Type::kLinux;
 #endif
+}
+
+absl::StatusOr<ServerArch::Type> GetServerArchTypeFromUname(
+    const std::string& uname_out) {
+  // uname_out is "KERNEL MACHINE"
+  // Possible values for KERNEL: Linux (not sure what else).
+  // Possible values for MACHINE:
+  // https://stackoverflow.com/questions/45125516/possible-values-for-uname-m
+  // Relevant for us: x86_64, aarch64.
+  if (absl::StartsWith(uname_out, "Linux ")) {
+    // Linux kernel. Check CPU type.
+    if (absl::StrContains(uname_out, "x86_64")) {
+      return ServerArch::Type::kLinux;
+    }
+  }
+
+  if (absl::StartsWith(uname_out, "MSYS_")) {
+    // Windows machine that happens to have Cygwin/MSYS on it. Check CPU type.
+    if (absl::StrContains(uname_out, "x86_64")) {
+      return ServerArch::Type::kWindows;
+    }
+  }
+
+  return absl::UnimplementedError(
+      absl::StrFormat(kUnsupportedArchErrorFmt, uname_out));
+}
+
+absl::StatusOr<ServerArch::Type> GetServerArchTypeFromWinProcArch(
+    const std::string& arch_out) {
+  // Possible values: AMD64, IA64, ARM64, x86
+  if (absl::StrContains(arch_out, "AMD64")) {
+    return ServerArch::Type::kWindows;
+  }
+
+  return absl::UnimplementedError(
+      absl::StrFormat(kUnsupportedArchErrorFmt, arch_out));
+}
+
+}  // namespace
+
+// static
+ServerArch ServerArch::GuessFromDestination(const std::string& destination) {
+  // Path starting with ~ or / -> Linux.
+  if (absl::StartsWith(destination, "~") ||
+      absl::StartsWith(destination, "/")) {
+    LOG_DEBUG("Guessed server arch type Linux based on ~ or /");
+    return ServerArch(Type::kLinux, /*is_guess=*/true);
+  }
+
+  // Path starting with C: etc. -> Windows.
+  if (!path::GetDrivePrefix(destination).empty()) {
+    LOG_DEBUG("Guessed server arch type Windows based on drive prefix");
+    return ServerArch(Type::kWindows, /*is_guess=*/true);
+  }
+
+  // Path with only / -> Linux.
+  if (absl::StrContains(destination, "/") &&
+      !absl::StrContains(destination, "\\")) {
+    LOG_DEBUG("Guessed server arch type Linux based on forward slashes");
+    return ServerArch(Type::kLinux, /*is_guess=*/true);
+  }
+
+  // Path with only \\ -> Windows.
+  if (absl::StrContains(destination, "\\") &&
+      !absl::StrContains(destination, "/")) {
+    LOG_DEBUG("Guessed server arch type Windows based on backslashes");
+    return ServerArch(Type::kWindows, /*is_guess=*/true);
+  }
+
+  // Default to Linux.
+  LOG_DEBUG("Guessed server arch type Linux as default");
+  return ServerArch(Type::kLinux, /*is_guess=*/true);
+}
+
+// static
+ServerArch ServerArch::DetectFromLocalDevice() {
+  LOG_DEBUG("Detected local device type %s", TypeToStr(LocalType()));
+  return ServerArch(LocalType(), /*is_guess=*/false);
+}
+
+// static
+absl::StatusOr<ServerArch> ServerArch::DetectFromRemoteDevice(
+    RemoteUtil* remote_util) {
+  assert(remote_util);
+
+  // Run uname, assuming it's a Linux machine.
+  std::string uname_out;
+  std::string linux_cmd = "uname -sm";
+  absl::Status status =
+      remote_util->RunWithCapture(linux_cmd, "uname", &uname_out, nullptr);
+  if (status.ok()) {
+    ServerArch::Type type;
+    LOG_DEBUG("Uname returned '%s'", uname_out);
+    ASSIGN_OR_RETURN(type, GetServerArchTypeFromUname(uname_out));
+    LOG_DEBUG("Detected server arch type %s from uname", TypeToStr(type));
+    return ServerArch(type, /*is_guess=*/false);
+  }
+  LOG_DEBUG("Failed to run uname: %s", status.ToString());
+
+  // Run echo %PROCESSOR_ARCHITECTURE%, assuming it's a Windows machine.
+  std::string arch_out;
+  std::string windows_cmd =
+      RemoteUtil::QuoteForSsh("cmd /C \"echo %PROCESSOR_ARCHITECTURE%\"");
+  status = remote_util->RunWithCapture(
+      windows_cmd, "echo %PROCESSOR_ARCHITECTURE%", &arch_out, nullptr);
+  if (status.ok()) {
+    ServerArch::Type type;
+    LOG_DEBUG("%PROCESSOR_ARCHITECTURE% is '%s'", arch_out);
+    ASSIGN_OR_RETURN(type, GetServerArchTypeFromWinProcArch(arch_out));
+    LOG_DEBUG("Detected server arch type %s from %PROCESSOR_ARCHITECTURE%",
+              TypeToStr(type));
+    return ServerArch(type, /*is_guess=*/false);
+  }
+  LOG_DEBUG("Failed to check %PROCESSOR_ARCHITECTURE%: %s", status.ToString());
+
+  return absl::InternalError("Failed to detect remote architecture");
 }
 
 // static
@@ -81,9 +174,25 @@ std::string ServerArch::CdcRsyncFilename() {
   }
 }
 
-ServerArch::ServerArch(Type type) : type_(type) {}
+ServerArch::ServerArch(Type type, bool is_guess)
+    : type_(type), is_guess_(is_guess) {}
 
 ServerArch::~ServerArch() {}
+
+// static
+const char* ServerArch::TypeToStr(Type type) {
+  switch (type) {
+    case Type::kWindows:
+      return "Windows";
+    case Type::kLinux:
+      return "Linux";
+    default:
+      assert(!kErrorArchTypeUnhandled);
+      return "unknown";
+  }
+}
+
+const char* ServerArch::GetTypeStr() const { return TypeToStr(type_); }
 
 std::string ServerArch::CdcServerFilename() const {
   switch (type_) {

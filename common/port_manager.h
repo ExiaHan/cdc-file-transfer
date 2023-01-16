@@ -36,6 +36,11 @@ class SharedMemory;
 // cdc_rsync.exe processes running concurrently.
 class PortManager {
  public:
+  enum class ArchType {
+    kLinux = 0,
+    kWindows = 1,
+  };
+
   // |unique_name| is a globally unique name used for shared memory to
   // synchronize port reservation. The range of possible ports managed by this
   // instance is [|first_port|, |last_port|]. |process_factory| is a valid
@@ -53,9 +58,12 @@ class PortManager {
   // explicitly.
   // |remote_timeout_sec| is the timeout for finding available ports on the
   // remote instance.
-  // Returns a DeadlineExceeded error if the timeout is exceeded.
-  // Returns a ResourceExhausted error if no ports are available.
-  absl::StatusOr<int> ReservePort(int remote_timeout_sec);
+  // |remote_arch_type| is the architecture of the remote device.
+  // Both |remote_timeout_sec| and |remote_arch_type| are ignored if
+  // |remote_util| is nullptr. Returns a DeadlineExceeded error if the timeout
+  // is exceeded. Returns a ResourceExhausted error if no ports are available.
+  absl::StatusOr<int> ReservePort(int remote_timeout_sec,
+                                  ArchType remote_arch_type);
 
   // Releases a reserved port.
   absl::Status ReleasePort(int port);
@@ -66,34 +74,34 @@ class PortManager {
 
   // Finds available ports in the range [first_port, last_port] for port
   // forwarding on the local workstation.
-  // |ip| is the IP address to filter by.
+  // |arch_type| is the architecture of the local device.
   // |process_factory| is used to create a netstat process.
   // Returns ResourceExhaustedError if no port is available.
   static absl::StatusOr<std::unordered_set<int>> FindAvailableLocalPorts(
-      int first_port, int last_port, const char* ip,
+      int first_port, int last_port, ArchType arch_type,
       ProcessFactory* process_factory);
 
   // Finds available ports in the range [first_port, last_port] for port
   // forwarding on the instance.
-  // |ip| is the IP address to filter by.
+  // |arch_type| is the architecture of the remote device.
   // |process_factory| is used to create a netstat process.
   // |remote_util| is used to connect to the instance.
   // |timeout_sec| is the connection timeout in seconds.
   // Returns a DeadlineExceeded error if the timeout is exceeded.
   // Returns ResourceExhaustedError if no port is available.
   static absl::StatusOr<std::unordered_set<int>> FindAvailableRemotePorts(
-      int first_port, int last_port, const char* ip,
+      int first_port, int last_port, ArchType arch_type,
       ProcessFactory* process_factory, RemoteUtil* remote_util, int timeout_sec,
       SteadyClock* steady_clock = DefaultSteadyClock::GetInstance());
 
  private:
   // Returns a list of available ports in the range [|first_port|, |last_port|]
-  // from the given |netstat_output|. |ip| is the IP address to look for, e.g.
-  // "127.0.0.1".
+  // from the given |netstat_output|.
+  // |arch_type| is the architecture of the device where netstat was called.
   // Returns ResourceExhaustedError if no port is available.
   static absl::StatusOr<std::unordered_set<int>> FindAvailablePorts(
       int first_port, int last_port, const std::string& netstat_output,
-      const char* ip);
+      ArchType arch_type);
 
   int first_port_;
   int last_port_;
