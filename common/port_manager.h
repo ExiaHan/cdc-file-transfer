@@ -17,12 +17,12 @@
 #ifndef COMMON_PORT_MANAGER_H_
 #define COMMON_PORT_MANAGER_H_
 
-#include <absl/status/statusor.h>
-
 #include <memory>
 #include <string>
 #include <unordered_set>
 
+#include "absl/status/statusor.h"
+#include "common/arch_type.h"
 #include "common/clock.h"
 
 namespace cdc_ft {
@@ -36,11 +36,6 @@ class SharedMemory;
 // cdc_rsync.exe processes running concurrently.
 class PortManager {
  public:
-  enum class ArchType {
-    kLinux = 0,
-    kWindows = 1,
-  };
-
   // |unique_name| is a globally unique name used for shared memory to
   // synchronize port reservation. The range of possible ports managed by this
   // instance is [|first_port|, |last_port|]. |process_factory| is a valid

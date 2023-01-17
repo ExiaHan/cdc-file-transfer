@@ -20,6 +20,7 @@
 #include <map>
 
 #include "absl/strings/str_split.h"
+#include "common/arch_type.h"
 #include "common/log.h"
 #include "common/process.h"
 #include "common/remote_util.h"
@@ -32,38 +33,38 @@ namespace cdc_ft {
 
 constexpr char kErrorArchTypeUnhandled[] = "arch_type_unhandled";
 
-using ArchType = PortManager::ArchType;
-
 // Returns the arch-specific netstat command.
 const char* GetNetstatCommand(ArchType arch_type) {
-  switch (arch_type) {
-    case ArchType::kWindows:
-      // -a to get the connection and ports the computer is listening on.
-      // -n to get numerical addresses to avoid the overhead of getting names.
-      // -p tcp to limit the output to TCPv4 connections.
-      return "netstat -a -n -p tcp";
-    case ArchType::kLinux:
-      // --numeric to get numerical addresses.
-      // --listening to get only listening sockets.
-      // --tcp to get only TCP connections.
-      return "netstat --numeric --listening --tcp";
-    default:
-      assert(!kErrorArchTypeUnhandled);
-      return "";
+  if (IsWindowsArchType(arch_type)) {
+    // -a to get the connection and ports the computer is listening on.
+    // -n to get numerical addresses to avoid the overhead of getting names.
+    // -p tcp to limit the output to TCPv4 connections.
+    return "netstat -a -n -p tcp";
   }
+
+  if (IsLinuxArchType(arch_type)) {
+    // --numeric to get numerical addresses.
+    // --listening to get only listening sockets.
+    // --tcp to get only TCP connections.
+    return "netstat --numeric --listening --tcp";
+  }
+
+  assert(!kErrorArchTypeUnhandled);
+  return "";
 }
 
 // Returns the arch-specific IP address to filter netstat results by.
 const char* GetNetstatFilterIp(ArchType arch_type) {
-  switch (arch_type) {
-    case ArchType::kWindows:
-      return "127.0.0.1";
-    case ArchType::kLinux:
-      return "0.0.0.0";
-    default:
-      assert(!kErrorArchTypeUnhandled);
-      return "";
+  if (IsWindowsArchType(arch_type)) {
+    return "127.0.0.1";
   }
+
+  if (IsLinuxArchType(arch_type)) {
+    return "0.0.0.0";
+  }
+
+  assert(!kErrorArchTypeUnhandled);
+  return "";
 }
 
 class SharedMemory {
@@ -163,8 +164,8 @@ absl::StatusOr<int> PortManager::ReservePort(int remote_timeout_sec,
   std::unordered_set<int> local_ports;
   ASSIGN_OR_RETURN(
       local_ports,
-      FindAvailableLocalPorts(first_port_, last_port_, ArchType::kWindows,
-                              process_factory_),
+      FindAvailableLocalPorts(first_port_, last_port_,
+                              ArchType::kWindows_x86_64, process_factory_),
       "Failed to find available ports on workstation");
 
   // Find available port on remote instance.
@@ -277,7 +278,7 @@ absl::StatusOr<std::unordered_set<int>> PortManager::FindAvailableRemotePorts(
     SteadyClock* steady_clock) {
   std::string remote_command = GetNetstatCommand(arch_type);
   ProcessStartInfo start_info =
-      remote_util->BuildProcessStartInfoForSsh(remote_command);
+      remote_util->BuildProcessStartInfoForSsh(remote_command, arch_type);
   start_info.name = "netstat";
   start_info.flags = ProcessFlags::kNoWindow;
 

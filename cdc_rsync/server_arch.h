@@ -20,6 +20,7 @@
 #include <string>
 
 #include "absl/status/statusor.h"
+#include "common/arch_type.h"
 
 namespace cdc_ft {
 
@@ -31,11 +32,6 @@ class RemoteUtil;
 // Windows machine and we can skip detection.
 class ServerArch {
  public:
-  enum class Type {
-    kLinux = 0,
-    kWindows = 1,
-  };
-
   // Guesses the architecture type based on the destination path, e.g. path
   // starting with C: indicate Windows.
   // This is a guessed type. It may be wrong. For instance, if destination is
@@ -54,14 +50,11 @@ class ServerArch {
   // Returns the (local!) arch specific filename of cdc_rsync[.exe].
   static std::string CdcRsyncFilename();
 
-  // Returns a human readable name for |type|.
-  static const char* TypeToStr(Type type);
-
-  ServerArch(Type type, bool is_guess);
+  ServerArch(ArchType type, bool is_guess);
   ~ServerArch();
 
   // Accessor for the arch type.
-  Type GetType() const { return type_; }
+  ArchType GetType() const { return type_; }
 
   // Returns the type as a human readable string.
   const char* GetTypeStr() const;
@@ -95,7 +88,7 @@ class ServerArch {
   std::string GetDeploySftpCommands() const;
 
  private:
-  Type type_;
+  ArchType type_;
   bool is_guess_ = false;
 };
 

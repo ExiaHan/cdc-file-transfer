@@ -19,6 +19,24 @@ cc_test(
 )
 
 cc_library(
+    name = "arch_type",
+    srcs = ["arch_type.cc"],
+    hdrs = ["arch_type.h"],
+    deps = [":platform"],
+)
+
+cc_test(
+    name = "arch_type_test",
+    srcs = ["arch_type_test.cc"],
+    deps = [
+        ":arch_type_test",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "buffer",
     srcs = ["buffer.cc"],
     hdrs = ["buffer.h"],
@@ -249,6 +267,7 @@ cc_library(
     hdrs = ["port_manager.h"],
     target_compatible_with = ["@platforms//os:windows"],
     deps = [
+        ":arch_type",
         ":remote_util",
         ":status",
         ":stopwatch",
@@ -355,6 +374,7 @@ cc_library(
     srcs = ["remote_util.cc"],
     hdrs = ["remote_util.h"],
     deps = [
+        ":arch_type",
         ":platform",
         ":process",
         ":sdk_util",

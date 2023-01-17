@@ -20,8 +20,8 @@
 namespace cdc_ft {
 namespace {
 
-constexpr auto kLinux = ServerArch::Type::kLinux;
-constexpr auto kWindows = ServerArch::Type::kWindows;
+constexpr auto kLinux = ArchType::kLinux_x86_64;
+constexpr auto kWindows = ArchType::kWindows_x86_64;
 
 constexpr bool kNoGuess = false;
 

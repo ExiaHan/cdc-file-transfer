@@ -77,7 +77,7 @@ absl::Status Session::Start(int local_port, int first_remote_port,
     ASSIGN_OR_RETURN(
         ports,
         PortManager::FindAvailableRemotePorts(
-            first_remote_port, last_remote_port, PortManager::ArchType::kLinux,
+            first_remote_port, last_remote_port, ArchType::kLinux_x86_64,
             process_factory_, &remote_util_, kInstanceConnectionTimeoutSec),
         "Failed to find an available remote port in the range [%d, %d]",
         first_remote_port, last_remote_port);

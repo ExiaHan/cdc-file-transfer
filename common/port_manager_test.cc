@@ -25,8 +25,6 @@
 namespace cdc_ft {
 namespace {
 
-using ArchType = PortManager::ArchType;
-
 constexpr char kUserHost[] = "user@1.2.3.4";
 
 constexpr char kGuid[] = "f77bcdfe-368c-4c45-9f01-230c5e7e2132";
@@ -72,7 +70,7 @@ TEST_F(PortManagerTest, ReservePortSuccess) {
   process_factory_.SetProcessOutput(kLinuxNetstat, "", "", 0);
 
   absl::StatusOr<int> port =
-      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   ASSERT_OK(port);
   EXPECT_EQ(*port, kFirstPort);
 }
@@ -86,7 +84,7 @@ TEST_F(PortManagerTest, ReservePortAllLocalPortsTaken) {
   process_factory_.SetProcessOutput(kLinuxNetstat, "", "", 0);
 
   absl::StatusOr<int> port =
-      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   EXPECT_TRUE(absl::IsResourceExhausted(port.status()));
   EXPECT_TRUE(
       absl::StrContains(port.status().message(), "No port available in range"));
@@ -101,7 +99,7 @@ TEST_F(PortManagerTest, ReservePortAllRemotePortsTaken) {
   process_factory_.SetProcessOutput(kLinuxNetstat, remote_netstat_out, "", 0);
 
   absl::StatusOr<int> port =
-      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   EXPECT_TRUE(absl::IsResourceExhausted(port.status()));
   EXPECT_TRUE(
       absl::StrContains(port.status().message(), "No port available in range"));
@@ -112,7 +110,7 @@ TEST_F(PortManagerTest, ReservePortLocalNetstatFails) {
   process_factory_.SetProcessOutput(kLinuxNetstat, "", "", 0);
 
   absl::StatusOr<int> port =
-      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   EXPECT_NOT_OK(port);
   EXPECT_TRUE(
       absl::StrContains(port.status().message(),
@@ -124,7 +122,7 @@ TEST_F(PortManagerTest, ReservePortRemoteNetstatFails) {
   process_factory_.SetProcessOutput(kLinuxNetstat, "", "", 1);
 
   absl::StatusOr<int> port =
-      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   EXPECT_NOT_OK(port);
   EXPECT_TRUE(absl::StrContains(port.status().message(),
                                 "Failed to find available ports on instance"));
@@ -136,7 +134,7 @@ TEST_F(PortManagerTest, ReservePortRemoteNetstatTimesOut) {
   steady_clock_.AutoAdvance(kTimeoutSec * 2 * 1000);
 
   absl::StatusOr<int> port =
-      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   EXPECT_NOT_OK(port);
   EXPECT_TRUE(absl::IsDeadlineExceeded(port.status()));
   EXPECT_TRUE(absl::StrContains(port.status().message(),
@@ -153,13 +151,13 @@ TEST_F(PortManagerTest, ReservePortMultipleInstances) {
   // Port managers use shared memory, so different instances know about each
   // other. This would even work if |port_manager_| and |port_manager2| belonged
   // to different processes, but we don't test that here.
-  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux),
+  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
             kFirstPort + 0);
-  EXPECT_EQ(*port_manager2.ReservePort(kTimeoutSec, ArchType::kLinux),
+  EXPECT_EQ(*port_manager2.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
             kFirstPort + 1);
-  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux),
+  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
             kFirstPort + 2);
-  EXPECT_EQ(*port_manager2.ReservePort(kTimeoutSec, ArchType::kLinux),
+  EXPECT_EQ(*port_manager2.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
             kFirstPort + 3);
 }
 
@@ -168,7 +166,7 @@ TEST_F(PortManagerTest, ReservePortReusesPortsInLRUOrder) {
   process_factory_.SetProcessOutput(kLinuxNetstat, "", "", 0);
 
   for (int n = 0; n < kNumPorts * 2; ++n) {
-    EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux),
+    EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
               kFirstPort + n % kNumPorts);
     system_clock_.Advance(1000);
   }
@@ -179,10 +177,10 @@ TEST_F(PortManagerTest, ReleasePort) {
   process_factory_.SetProcessOutput(kLinuxNetstat, "", "", 0);
 
   absl::StatusOr<int> port =
-      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+      port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   EXPECT_EQ(*port, kFirstPort);
   EXPECT_OK(port_manager_.ReleasePort(*port));
-  port = port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux);
+  port = port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64);
   EXPECT_EQ(*port, kFirstPort);
 }
 
@@ -192,12 +190,12 @@ TEST_F(PortManagerTest, ReleasePortOnDestruction) {
 
   auto port_manager2 = std::make_unique<PortManager>(
       kGuid, kFirstPort, kLastPort, &process_factory_, &remote_util_);
-  EXPECT_EQ(*port_manager2->ReservePort(kTimeoutSec, ArchType::kLinux),
+  EXPECT_EQ(*port_manager2->ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
             kFirstPort + 0);
-  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux),
+  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
             kFirstPort + 1);
   port_manager2.reset();
-  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux),
+  EXPECT_EQ(*port_manager_.ReservePort(kTimeoutSec, ArchType::kLinux_x86_64),
             kFirstPort + 0);
 }
 
@@ -209,7 +207,7 @@ TEST_F(PortManagerTest, FindAvailableLocalPortsSuccessWindows) {
 
   absl::StatusOr<std::unordered_set<int>> ports =
       PortManager::FindAvailableLocalPorts(
-          kFirstPort, kLastPort, ArchType::kWindows, &process_factory_);
+          kFirstPort, kLastPort, ArchType::kWindows_x86_64, &process_factory_);
   ASSERT_OK(ports);
   EXPECT_EQ(ports->size(), kNumPorts - 1);
   for (int port = kFirstPort + 1; port <= kLastPort; ++port) {
@@ -224,8 +222,8 @@ TEST_F(PortManagerTest, FindAvailableLocalPortsSuccessLinux) {
   process_factory_.SetProcessOutput(kLinuxNetstat, local_netstat_out, "", 0);
 
   absl::StatusOr<std::unordered_set<int>> ports =
-      PortManager::FindAvailableLocalPorts(kFirstPort, kLastPort,
-                                           ArchType::kLinux, &process_factory_);
+      PortManager::FindAvailableLocalPorts(
+          kFirstPort, kLastPort, ArchType::kLinux_x86_64, &process_factory_);
   ASSERT_OK(ports);
   EXPECT_EQ(ports->size(), kNumPorts - 1);
   for (int port = kFirstPort + 1; port <= kLastPort; ++port) {
@@ -243,7 +241,7 @@ TEST_F(PortManagerTest, FindAvailableLocalPortsFailsNoPorts) {
 
   absl::StatusOr<std::unordered_set<int>> ports =
       PortManager::FindAvailableLocalPorts(
-          kFirstPort, kLastPort, ArchType::kWindows, &process_factory_);
+          kFirstPort, kLastPort, ArchType::kWindows_x86_64, &process_factory_);
   EXPECT_TRUE(absl::IsResourceExhausted(ports.status()));
   EXPECT_TRUE(absl::StrContains(ports.status().message(),
                                 "No port available in range"));
@@ -256,9 +254,9 @@ TEST_F(PortManagerTest, FindAvailableRemotePortsSuccessLinux) {
   process_factory_.SetProcessOutput(kLinuxNetstat, remote_netstat_out, "", 0);
 
   absl::StatusOr<std::unordered_set<int>> ports =
-      PortManager::FindAvailableRemotePorts(kFirstPort, kLastPort,
-                                            ArchType::kLinux, &process_factory_,
-                                            &remote_util_, kTimeoutSec);
+      PortManager::FindAvailableRemotePorts(
+          kFirstPort, kLastPort, ArchType::kLinux_x86_64, &process_factory_,
+          &remote_util_, kTimeoutSec);
   ASSERT_OK(ports);
   EXPECT_EQ(ports->size(), kNumPorts - 1);
   for (int port = kFirstPort + 1; port <= kLastPort; ++port) {
@@ -274,7 +272,7 @@ TEST_F(PortManagerTest, FindAvailableRemotePortsSuccessWindows) {
 
   absl::StatusOr<std::unordered_set<int>> ports =
       PortManager::FindAvailableRemotePorts(
-          kFirstPort, kLastPort, ArchType::kWindows, &process_factory_,
+          kFirstPort, kLastPort, ArchType::kWindows_x86_64, &process_factory_,
           &remote_util_, kTimeoutSec);
   ASSERT_OK(ports);
   EXPECT_EQ(ports->size(), kNumPorts - 1);
@@ -292,9 +290,9 @@ TEST_F(PortManagerTest, FindAvailableRemotePortsFailsNoPorts) {
   process_factory_.SetProcessOutput(kLinuxNetstat, remote_netstat_out, "", 0);
 
   absl::StatusOr<std::unordered_set<int>> ports =
-      PortManager::FindAvailableRemotePorts(kFirstPort, kLastPort,
-                                            ArchType::kLinux, &process_factory_,
-                                            &remote_util_, kTimeoutSec);
+      PortManager::FindAvailableRemotePorts(
+          kFirstPort, kLastPort, ArchType::kLinux_x86_64, &process_factory_,
+          &remote_util_, kTimeoutSec);
   EXPECT_TRUE(absl::IsResourceExhausted(ports.status()));
   EXPECT_TRUE(absl::StrContains(ports.status().message(),
                                 "No port available in range"));

@@ -58,18 +58,6 @@ SetOptionsRequest::FilterRule::Type ToProtoType(PathFilter::Rule::Type type) {
   return SetOptionsRequest::FilterRule::TYPE_INCLUDE;
 }
 
-PortManager::ArchType ToPortManagerArchType(ServerArch::Type type) {
-  switch (type) {
-    case ServerArch::Type::kWindows:
-      return PortManager::ArchType::kWindows;
-    case ServerArch::Type::kLinux:
-      return PortManager::ArchType::kLinux;
-    default:
-      assert(!"Unhandled arch type");
-      return PortManager::ArchType::kLinux;
-  }
-}
-
 // Translates a server process exit code and stderr into a status.
 absl::Status GetServerExitStatus(int exit_code, const std::string& error_msg) {
   auto se_code = static_cast<ServerExitCode>(exit_code);
@@ -158,12 +146,12 @@ absl::Status CdcRsyncClient::Run() {
     // Check whether we guessed the arch type wrong and try again.
     // Note that in case of a local sync, or if the server actively reported
     // that it's out-dated, there's no need to detect the arch.
-    const ServerArch::Type old_type = server_arch.GetType();
+    const ArchType old_type = server_arch.GetType();
     ASSIGN_OR_RETURN(server_arch,
                      ServerArch::DetectFromRemoteDevice(remote_util_.get()));
     if (server_arch.GetType() != old_type) {
       LOG_DEBUG("Guessed server arch type wrong, guessed %s, actual %s.",
-                ServerArch::TypeToStr(old_type), server_arch.GetTypeStr());
+                GetArchTypeStr(old_type), server_arch.GetTypeStr());
       status = StartServer(port, server_arch);
     }
   }
@@ -215,9 +203,8 @@ absl::StatusOr<int> CdcRsyncClient::FindAvailablePort(ServerArch* server_arch) {
   }
 
   assert(server_arch);
-  absl::StatusOr<int> port =
-      port_manager_->ReservePort(options_.connection_timeout_sec,
-                                 ToPortManagerArchType(server_arch->GetType()));
+  absl::StatusOr<int> port = port_manager_->ReservePort(
+      options_.connection_timeout_sec, server_arch->GetType());
 
   if (absl::IsDeadlineExceeded(port.status())) {
     // Server didn't respond in time.
@@ -231,13 +218,13 @@ absl::StatusOr<int> CdcRsyncClient::FindAvailablePort(ServerArch* server_arch) {
   // If |server_arch| was guessed, calling netstat might have failed because
   // the arch was wrong. Properly detect it and try again if it changed.
   if (!port.ok() && server_arch->IsGuess()) {
-    const ServerArch::Type old_type = server_arch->GetType();
+    const ArchType old_type = server_arch->GetType();
     ASSIGN_OR_RETURN(*server_arch,
                      ServerArch::DetectFromRemoteDevice(remote_util_.get()));
     assert(!server_arch->IsGuess());
     if (server_arch->GetType() != old_type) {
       LOG_DEBUG("Guessed server arch type wrong, guessed %s, actual %s.",
-                ServerArch::TypeToStr(old_type), server_arch->GetTypeStr());
+                GetArchTypeStr(old_type), server_arch->GetTypeStr());
       return FindAvailablePort(server_arch);
     }
   }
@@ -274,7 +261,7 @@ absl::Status CdcRsyncClient::StartServer(int port, const ServerArch& arch) {
     std::string remote_command = arch.GetStartServerCommand(
         kExitCodeNotFound, absl::StrFormat("%i %s", port, component_args));
     start_info = remote_util_->BuildProcessStartInfoForSshPortForwardAndCommand(
-        port, port, /*reverse=*/false, remote_command);
+        port, port, /*reverse=*/false, remote_command, arch.GetType());
   } else {
     // Run cdc_rsync_server locally.
     std::string exe_dir;

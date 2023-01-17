@@ -19,8 +19,8 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_split.h"
+#include "common/ansi_filter.h"
 #include "common/path.h"
-#include "common/platform.h"
 #include "common/remote_util.h"
 #include "common/status_macros.h"
 #include "common/util.h"
@@ -28,25 +28,13 @@
 namespace cdc_ft {
 namespace {
 
-constexpr char kErrorFailedToGetKnownFolderPath[] =
-    "error_failed_to_get_known_folder_path";
 constexpr char kErrorArchTypeUnhandled[] = "arch_type_unhandled";
 constexpr char kUnsupportedArchErrorFmt[] =
     "Unsupported remote device architecture '%s'. If you think this is a "
     "bug, or if this combination should be supported, please file a bug at "
     "https://github.com/google/cdc-file-transfer.";
 
-// Returns the server arch type of the current process.
-ServerArch::Type LocalType() {
-#if PLATFORM_WINDOWS
-  return ServerArch::Type::kWindows;
-#elif PLATFORM_LINUX
-  return ServerArch::Type::kLinux;
-#endif
-}
-
-absl::StatusOr<ServerArch::Type> GetServerArchTypeFromUname(
-    const std::string& uname_out) {
+absl::StatusOr<ArchType> GetArchTypeFromUname(const std::string& uname_out) {
   // uname_out is "KERNEL MACHINE"
   // Possible values for KERNEL: Linux (not sure what else).
   // Possible values for MACHINE:
@@ -55,14 +43,14 @@ absl::StatusOr<ServerArch::Type> GetServerArchTypeFromUname(
   if (absl::StartsWith(uname_out, "Linux ")) {
     // Linux kernel. Check CPU type.
     if (absl::StrContains(uname_out, "x86_64")) {
-      return ServerArch::Type::kLinux;
+      return ArchType::kLinux_x86_64;
     }
   }
 
   if (absl::StartsWith(uname_out, "MSYS_")) {
     // Windows machine that happens to have Cygwin/MSYS on it. Check CPU type.
     if (absl::StrContains(uname_out, "x86_64")) {
-      return ServerArch::Type::kWindows;
+      return ArchType::kWindows_x86_64;
     }
   }
 
@@ -70,11 +58,11 @@ absl::StatusOr<ServerArch::Type> GetServerArchTypeFromUname(
       absl::StrFormat(kUnsupportedArchErrorFmt, uname_out));
 }
 
-absl::StatusOr<ServerArch::Type> GetServerArchTypeFromWinProcArch(
+absl::StatusOr<ArchType> GetArchTypeFromWinProcArch(
     const std::string& arch_out) {
   // Possible values: AMD64, IA64, ARM64, x86
   if (absl::StrContains(arch_out, "AMD64")) {
-    return ServerArch::Type::kWindows;
+    return ArchType::kWindows_x86_64;
   }
 
   return absl::UnimplementedError(
@@ -89,38 +77,39 @@ ServerArch ServerArch::GuessFromDestination(const std::string& destination) {
   if (absl::StartsWith(destination, "~") ||
       absl::StartsWith(destination, "/")) {
     LOG_DEBUG("Guessed server arch type Linux based on ~ or /");
-    return ServerArch(Type::kLinux, /*is_guess=*/true);
+    return ServerArch(ArchType::kLinux_x86_64, /*is_guess=*/true);
   }
 
   // Path starting with C: etc. -> Windows.
   if (!path::GetDrivePrefix(destination).empty()) {
     LOG_DEBUG("Guessed server arch type Windows based on drive prefix");
-    return ServerArch(Type::kWindows, /*is_guess=*/true);
+    return ServerArch(ArchType::kWindows_x86_64, /*is_guess=*/true);
   }
 
   // Path with only / -> Linux.
   if (absl::StrContains(destination, "/") &&
       !absl::StrContains(destination, "\\")) {
     LOG_DEBUG("Guessed server arch type Linux based on forward slashes");
-    return ServerArch(Type::kLinux, /*is_guess=*/true);
+    return ServerArch(ArchType::kLinux_x86_64, /*is_guess=*/true);
   }
 
   // Path with only \\ -> Windows.
   if (absl::StrContains(destination, "\\") &&
       !absl::StrContains(destination, "/")) {
     LOG_DEBUG("Guessed server arch type Windows based on backslashes");
-    return ServerArch(Type::kWindows, /*is_guess=*/true);
+    return ServerArch(ArchType::kWindows_x86_64, /*is_guess=*/true);
   }
 
   // Default to Linux.
   LOG_DEBUG("Guessed server arch type Linux as default");
-  return ServerArch(Type::kLinux, /*is_guess=*/true);
+  return ServerArch(ArchType::kLinux_x86_64, /*is_guess=*/true);
 }
 
 // static
 ServerArch ServerArch::DetectFromLocalDevice() {
-  LOG_DEBUG("Detected local device type %s", TypeToStr(LocalType()));
-  return ServerArch(LocalType(), /*is_guess=*/false);
+  LOG_DEBUG("Detected local device type %s",
+            GetArchTypeStr(GetLocalArchType()));
+  return ServerArch(GetLocalArchType(), /*is_guess=*/false);
 }
 
 // static
@@ -131,42 +120,57 @@ absl::StatusOr<ServerArch> ServerArch::DetectFromRemoteDevice(
   // Run uname, assuming it's a Linux machine.
   std::string uname_out;
   std::string linux_cmd = "uname -sm";
-  absl::Status status =
-      remote_util->RunWithCapture(linux_cmd, "uname", &uname_out, nullptr);
+  absl::Status status = remote_util->RunWithCapture(
+      linux_cmd, "uname", &uname_out, nullptr, ArchType::kLinux_x86_64);
   if (status.ok()) {
-    ServerArch::Type type;
+    // Running uname on Windows, assuming it's Linux, leads to tons of ANSI
+    // escape sequences in the output. Remove them to at least get some readable
+    // output.
+    uname_out = absl::StripAsciiWhitespace(
+        ansi_filter::RemoveEscapeSequences(uname_out));
+
     LOG_DEBUG("Uname returned '%s'", uname_out);
-    ASSIGN_OR_RETURN(type, GetServerArchTypeFromUname(uname_out));
-    LOG_DEBUG("Detected server arch type %s from uname", TypeToStr(type));
-    return ServerArch(type, /*is_guess=*/false);
+    absl::StatusOr<ArchType> type = GetArchTypeFromUname(uname_out);
+    if (type.ok()) {
+      LOG_DEBUG("Detected server arch type %s from uname",
+                GetArchTypeStr(*type));
+      return ServerArch(*type, /*is_guess=*/false);
+    }
+    status = type.status();
   }
-  LOG_DEBUG("Failed to run uname: %s", status.ToString());
+  LOG_DEBUG("Failed to detect arch type from uname: %s", status.ToString());
 
   // Run echo %PROCESSOR_ARCHITECTURE%, assuming it's a Windows machine.
+  // Note: That space after PROCESSOR_ARCHITECTURE is important or else Windows
+  //       command magic interprets quotes as part of the string.
   std::string arch_out;
   std::string windows_cmd =
-      RemoteUtil::QuoteForSsh("cmd /C \"echo %PROCESSOR_ARCHITECTURE%\"");
-  status = remote_util->RunWithCapture(
-      windows_cmd, "echo %PROCESSOR_ARCHITECTURE%", &arch_out, nullptr);
+      RemoteUtil::QuoteForSsh("cmd /C set PROCESSOR_ARCHITECTURE ");
+  status = remote_util->RunWithCapture(windows_cmd,
+                                       "set PROCESSOR_ARCHITECTURE", &arch_out,
+                                       nullptr, ArchType::kWindows_x86_64);
   if (status.ok()) {
-    ServerArch::Type type;
     LOG_DEBUG("%PROCESSOR_ARCHITECTURE% is '%s'", arch_out);
-    ASSIGN_OR_RETURN(type, GetServerArchTypeFromWinProcArch(arch_out));
-    LOG_DEBUG("Detected server arch type %s from %PROCESSOR_ARCHITECTURE%",
-              TypeToStr(type));
-    return ServerArch(type, /*is_guess=*/false);
+    absl::StatusOr<ArchType> type = GetArchTypeFromWinProcArch(arch_out);
+    if (type.ok()) {
+      LOG_DEBUG("Detected server arch type %s from %%PROCESSOR_ARCHITECTURE%%",
+                GetArchTypeStr(*type));
+      return ServerArch(*type, /*is_guess=*/false);
+    }
+    status = type.status();
   }
-  LOG_DEBUG("Failed to check %PROCESSOR_ARCHITECTURE%: %s", status.ToString());
+  LOG_DEBUG("Failed to detect arch type from %%PROCESSOR_ARCHITECTURE%%: %s",
+            status.ToString());
 
   return absl::InternalError("Failed to detect remote architecture");
 }
 
 // static
 std::string ServerArch::CdcRsyncFilename() {
-  switch (LocalType()) {
-    case Type::kWindows:
+  switch (GetLocalArchType()) {
+    case ArchType::kWindows_x86_64:
       return "cdc_rsync.exe";
-    case Type::kLinux:
+    case ArchType::kLinux_x86_64:
       return "cdc_rsync";
     default:
       assert(!kErrorArchTypeUnhandled);
@@ -174,31 +178,18 @@ std::string ServerArch::CdcRsyncFilename() {
   }
 }
 
-ServerArch::ServerArch(Type type, bool is_guess)
+ServerArch::ServerArch(ArchType type, bool is_guess)
     : type_(type), is_guess_(is_guess) {}
 
 ServerArch::~ServerArch() {}
 
-// static
-const char* ServerArch::TypeToStr(Type type) {
-  switch (type) {
-    case Type::kWindows:
-      return "Windows";
-    case Type::kLinux:
-      return "Linux";
-    default:
-      assert(!kErrorArchTypeUnhandled);
-      return "unknown";
-  }
-}
-
-const char* ServerArch::GetTypeStr() const { return TypeToStr(type_); }
+const char* ServerArch::GetTypeStr() const { return GetArchTypeStr(type_); }
 
 std::string ServerArch::CdcServerFilename() const {
   switch (type_) {
-    case Type::kWindows:
+    case ArchType::kWindows_x86_64:
       return "cdc_rsync_server.exe";
-    case Type::kLinux:
+    case ArchType::kLinux_x86_64:
       return "cdc_rsync_server";
     default:
       assert(!kErrorArchTypeUnhandled);
@@ -207,46 +198,46 @@ std::string ServerArch::CdcServerFilename() const {
 }
 
 std::string ServerArch::RemoteToolsBinDir() const {
-  switch (type_) {
-    case Type::kWindows: {
-      return "AppData\\Roaming\\cdc-file-transfer\\bin\\";
-    }
-    case Type::kLinux:
-      return ".cache/cdc-file-transfer/bin/";
-    default:
-      assert(!kErrorArchTypeUnhandled);
-      return std::string();
+  if (IsWindowsArchType(type_)) {
+    return "AppData\\Roaming\\cdc-file-transfer\\bin\\";
   }
+
+  if (IsLinuxArchType(type_)) {
+    return ".cache/cdc-file-transfer/bin/";
+  }
+
+  assert(!kErrorArchTypeUnhandled);
+  return std::string();
 }
 
 std::string ServerArch::GetStartServerCommand(int exit_code_not_found,
                                               const std::string& args) const {
   std::string server_path = RemoteToolsBinDir() + CdcServerFilename();
 
-  switch (type_) {
-    case Type::kWindows:
-      // TODO(ljusten): On Windows, ssh does not seem to forward the Powershell
-      // exit code (exit_code_not_found) to the process. However, that's really
-      // a minor issue and means we display "Deploying server..." instead of
-      // "Server not deployed. Deploying...";
-      return RemoteUtil::QuoteForWindows(
-          absl::StrFormat("powershell -Command \" "
-                          "Set-StrictMode -Version 2; "
-                          "$ErrorActionPreference = 'Stop'; "
-                          "if (-not (Test-Path -Path '%s')) { "
-                          "  exit %i; "
-                          "} "
-                          "%s %s "
-                          "\"",
-                          server_path, exit_code_not_found, server_path, args));
-    case Type::kLinux:
-      return absl::StrFormat("if [ ! -f %s ]; then exit %i; fi; %s %s",
-                             server_path, exit_code_not_found, server_path,
-                             args);
-    default:
-      assert(!kErrorArchTypeUnhandled);
-      return std::string();
+  if (IsWindowsArchType(type_)) {
+    // TODO(ljusten): On Windows, ssh does not seem to forward the Powershell
+    // exit code (exit_code_not_found) to the process. However, that's really
+    // a minor issue and means we display "Deploying server..." instead of
+    // "Server not deployed. Deploying...";
+    return RemoteUtil::QuoteForWindows(
+        absl::StrFormat("powershell -Command \" "
+                        "Set-StrictMode -Version 2; "
+                        "$ErrorActionPreference = 'Stop'; "
+                        "if (-not (Test-Path -Path '%s')) { "
+                        "  exit %i; "
+                        "} "
+                        "%s %s "
+                        "\"",
+                        server_path, exit_code_not_found, server_path, args));
   }
+
+  if (IsLinuxArchType(type_)) {
+    return absl::StrFormat("if [ ! -f %s ]; then exit %i; fi; %s %s",
+                           server_path, exit_code_not_found, server_path, args);
+  }
+
+  assert(!kErrorArchTypeUnhandled);
+  return std::string();
 }
 
 std::string ServerArch::GetDeploySftpCommands() const {
