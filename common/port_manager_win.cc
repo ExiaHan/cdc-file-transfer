@@ -43,10 +43,12 @@ const char* GetNetstatCommand(ArchType arch_type) {
   }
 
   if (IsLinuxArchType(arch_type)) {
+    // Prefer ss over netstat. The flags out output are compatible.
     // --numeric to get numerical addresses.
     // --listening to get only listening sockets.
     // --tcp to get only TCP connections.
-    return "netstat --numeric --listening --tcp";
+    return "if which ss; then ss --numeric --listening --tcp; else "
+           "netstat --numeric --listening --tcp; fi";
   }
 
   assert(!kErrorArchTypeUnhandled);
